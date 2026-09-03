@@ -25,6 +25,10 @@ function InterviewRoom({ user, setActivePage }) {
   const [answers, setAnswers] = useState([]);
 
   const [isRecording, setIsRecording] = useState(false);
+
+  const [isFinalizingAudio, setIsFinalizingAudio] =
+    useState(false);
+
   const [recordingSeconds, setRecordingSeconds] =
     useState(0);
 
@@ -48,17 +52,12 @@ function InterviewRoom({ user, setActivePage }) {
   const sessionKey =
     `talentVueActiveInterview_${user?.id}`;
 
-  /*
-    Keep latest answers available inside
-    timer callbacks.
-  */
+  // Keep latest answers
   useEffect(() => {
     answersRef.current = answers;
   }, [answers]);
 
-  /*
-    Stop microphone stream.
-  */
+  // Stop microphone stream
   const stopMediaStream = useCallback(() => {
     if (!streamRef.current) return;
 
@@ -71,9 +70,7 @@ function InterviewRoom({ user, setActivePage }) {
     streamRef.current = null;
   }, []);
 
-  /*
-    Remove current audio preview.
-  */
+  // Remove old recording
   const clearAudio = useCallback(() => {
     if (audioURLRef.current) {
       URL.revokeObjectURL(
@@ -88,9 +85,7 @@ function InterviewRoom({ user, setActivePage }) {
     setRecordingSeconds(0);
   }, []);
 
-  /*
-    Load interview setup.
-  */
+  // Load interview setup
   useEffect(() => {
     if (!user?.id) return;
 
@@ -125,12 +120,13 @@ function InterviewRoom({ user, setActivePage }) {
       setAnswerText("");
 
       setAnswers([]);
+
       answersRef.current = [];
 
-      setAudioURL("");
-      setAudioBlob(null);
+      clearAudio();
 
-      setRecordingSeconds(0);
+      setIsRecording(false);
+      setIsFinalizingAudio(false);
 
       setMicrophoneStatus("idle");
 
@@ -150,11 +146,13 @@ function InterviewRoom({ user, setActivePage }) {
         "Unable to load interview setup."
       );
     }
-  }, [user?.id, pendingKey]);
+  }, [
+    user?.id,
+    pendingKey,
+    clearAudio,
+  ]);
 
-  /*
-    Save completed interview.
-  */
+  // Finish interview
   const finishInterview = useCallback(
     (finalAnswers) => {
       if (finishingRef.current) {
@@ -167,9 +165,6 @@ function InterviewRoom({ user, setActivePage }) {
         finalAnswers ??
         answersRef.current;
 
-      /*
-        Stop active microphone recording.
-      */
       if (
         mediaRecorderRef.current &&
         mediaRecorderRef.current.state !==
@@ -188,6 +183,7 @@ function InterviewRoom({ user, setActivePage }) {
       stopMediaStream();
 
       setIsRecording(false);
+      setIsFinalizingAudio(false);
 
       setInterviewStarted(false);
 
@@ -198,7 +194,8 @@ function InterviewRoom({ user, setActivePage }) {
 
         setup,
 
-        answers: completedAnswers,
+        answers:
+          completedAnswers,
 
         totalQuestions:
           questions.length,
@@ -221,9 +218,7 @@ function InterviewRoom({ user, setActivePage }) {
         status: "completed",
       };
 
-      /*
-        Latest completed interview
-      */
+      // Latest report
       localStorage.setItem(
         `talentVueCompletedInterview_${user.id}`,
         JSON.stringify(
@@ -231,9 +226,7 @@ function InterviewRoom({ user, setActivePage }) {
         )
       );
 
-      /*
-        Save interview in history.
-      */
+      // Save history
       const historyKey =
         `talentVueInterviewHistory_${user.id}`;
 
@@ -283,18 +276,10 @@ function InterviewRoom({ user, setActivePage }) {
         );
       }
 
-      /*
-        Remove active interview session.
-      */
       localStorage.removeItem(
         sessionKey
       );
 
-      /*
-        Remove pending interview.
-        User must configure again for
-        another interview.
-      */
       localStorage.removeItem(
         pendingKey
       );
@@ -317,9 +302,7 @@ function InterviewRoom({ user, setActivePage }) {
     ]
   );
 
-  /*
-    Overall interview timer.
-  */
+  // Overall interview timer
   useEffect(() => {
     if (!interviewStarted) return;
 
@@ -343,16 +326,15 @@ function InterviewRoom({ user, setActivePage }) {
       );
     }, 1000);
 
-    return () =>
+    return () => {
       clearInterval(timer);
+    };
   }, [
     interviewStarted,
     finishInterview,
   ]);
 
-  /*
-    Voice recording timer.
-  */
+  // Recording timer
   useEffect(() => {
     if (!isRecording) return;
 
@@ -363,13 +345,12 @@ function InterviewRoom({ user, setActivePage }) {
       );
     }, 1000);
 
-    return () =>
+    return () => {
       clearInterval(timer);
+    };
   }, [isRecording]);
 
-  /*
-    Cleanup when component closes.
-  */
+  // Cleanup
   useEffect(() => {
     return () => {
       if (
@@ -406,9 +387,6 @@ function InterviewRoom({ user, setActivePage }) {
       currentQuestionIndex
     ];
 
-  /*
-    Interview progress percentage.
-  */
   const progress = useMemo(() => {
     if (!questions.length) {
       return 0;
@@ -424,9 +402,10 @@ function InterviewRoom({ user, setActivePage }) {
     questions.length,
   ]);
 
-  /*
-    Start microphone recording.
-  */
+  // ---------------------------
+  // START RECORDING
+  // ---------------------------
+
   const startRecording =
     async () => {
       setError("");
@@ -454,15 +433,15 @@ function InterviewRoom({ user, setActivePage }) {
         return;
       }
 
-      if (isRecording) {
+      if (
+        isRecording ||
+        isFinalizingAudio
+      ) {
         return;
       }
 
       try {
-        /*
-          Remove previous recording
-          before recording again.
-        */
+        // Remove previous recording
         clearAudio();
 
         setMicrophoneStatus(
@@ -475,38 +454,88 @@ function InterviewRoom({ user, setActivePage }) {
         const stream =
           await navigator.mediaDevices.getUserMedia(
             {
-              audio: true,
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+              },
             }
           );
 
         streamRef.current = stream;
 
-        let recorder;
+        // Check microphone track
+        const audioTracks =
+          stream.getAudioTracks();
+
+        if (
+          audioTracks.length === 0
+        ) {
+          setError(
+            "No microphone audio track was found."
+          );
+
+          setMicrophoneStatus(
+            "denied"
+          );
+
+          stopMediaStream();
+
+          return;
+        }
+
+        const audioTrack =
+          audioTracks[0];
+
+        console.log(
+          "Microphone name:",
+          audioTrack.label
+        );
+
+        console.log(
+          "Microphone enabled:",
+          audioTrack.enabled
+        );
+
+        console.log(
+          "Microphone muted:",
+          audioTrack.muted
+        );
+
+        console.log(
+          "Microphone settings:",
+          audioTrack.getSettings?.()
+        );
+
+        let mimeType = "";
 
         if (
           MediaRecorder.isTypeSupported(
             "audio/webm;codecs=opus"
           )
         ) {
-          recorder =
-            new MediaRecorder(
-              stream,
-              {
-                mimeType:
-                  "audio/webm;codecs=opus",
-              }
-            );
+          mimeType =
+            "audio/webm;codecs=opus";
         } else if (
           MediaRecorder.isTypeSupported(
             "audio/webm"
           )
         ) {
+          mimeType =
+            "audio/webm";
+        }
+
+        let recorder;
+
+        if (mimeType) {
           recorder =
             new MediaRecorder(
               stream,
               {
-                mimeType:
-                  "audio/webm",
+                mimeType,
+
+                audioBitsPerSecond:
+                  128000,
               }
             );
         } else {
@@ -521,8 +550,24 @@ function InterviewRoom({ user, setActivePage }) {
 
         chunksRef.current = [];
 
+        recorder.onstart = () => {
+          console.log(
+            "Recording started"
+          );
+
+          console.log(
+            "Recorder MIME type:",
+            recorder.mimeType
+          );
+        };
+
         recorder.ondataavailable =
           (event) => {
+            console.log(
+              "Audio chunk size:",
+              event.data?.size
+            );
+
             if (
               event.data &&
               event.data.size > 0
@@ -543,13 +588,28 @@ function InterviewRoom({ user, setActivePage }) {
             setError(
               "An error occurred while recording audio."
             );
+
+            setIsRecording(false);
+
+            setIsFinalizingAudio(false);
+
+            setMicrophoneStatus(
+              "denied"
+            );
           };
 
         recorder.onstop = () => {
-          /*
-            Skip/delete/timeout can
-            intentionally discard audio.
-          */
+          console.log(
+            "Recording stopped"
+          );
+
+          console.log(
+            "Audio chunks:",
+            chunksRef.current.length
+          );
+
+          setIsRecording(false);
+
           if (
             discardRecordingRef.current
           ) {
@@ -557,6 +617,12 @@ function InterviewRoom({ user, setActivePage }) {
               false;
 
             chunksRef.current = [];
+
+            setIsFinalizingAudio(false);
+
+            setMicrophoneStatus(
+              "idle"
+            );
 
             stopMediaStream();
 
@@ -567,7 +633,18 @@ function InterviewRoom({ user, setActivePage }) {
             chunksRef.current.length ===
             0
           ) {
+            setError(
+              "No audio data was captured. Please check your microphone input."
+            );
+
+            setIsFinalizingAudio(false);
+
+            setMicrophoneStatus(
+              "idle"
+            );
+
             stopMediaStream();
+
             return;
           }
 
@@ -580,6 +657,33 @@ function InterviewRoom({ user, setActivePage }) {
                   "audio/webm",
               }
             );
+
+          console.log(
+            "Final audio size:",
+            blob.size,
+            "bytes"
+          );
+
+          console.log(
+            "Final audio type:",
+            blob.type
+          );
+
+          if (blob.size === 0) {
+            setError(
+              "The recorded audio file is empty. Please check your microphone."
+            );
+
+            setIsFinalizingAudio(false);
+
+            setMicrophoneStatus(
+              "idle"
+            );
+
+            stopMediaStream();
+
+            return;
+          }
 
           if (
             audioURLRef.current
@@ -594,10 +698,14 @@ function InterviewRoom({ user, setActivePage }) {
               blob
             );
 
-          audioURLRef.current = url;
+          audioURLRef.current =
+            url;
 
           setAudioBlob(blob);
+
           setAudioURL(url);
+
+          setIsFinalizingAudio(false);
 
           setMicrophoneStatus(
             "ready"
@@ -608,21 +716,33 @@ function InterviewRoom({ user, setActivePage }) {
           stopMediaStream();
         };
 
-        recorder.start();
+        /*
+          IMPORTANT:
+          Browser creates audio chunks
+          every 250 milliseconds.
+        */
+        recorder.start(250);
 
         setRecordingSeconds(0);
 
         setIsRecording(true);
 
+        setIsFinalizingAudio(false);
+
         setMicrophoneStatus(
           "recording"
         );
       } catch (error) {
-        console.error(error);
+        console.error(
+          "Microphone error:",
+          error
+        );
 
         stopMediaStream();
 
         setIsRecording(false);
+
+        setIsFinalizingAudio(false);
 
         setMicrophoneStatus(
           "denied"
@@ -642,6 +762,13 @@ function InterviewRoom({ user, setActivePage }) {
           setError(
             "No microphone was found on this device."
           );
+        } else if (
+          error?.name ===
+          "NotReadableError"
+        ) {
+          setError(
+            "Your microphone is being used by another application."
+          );
         } else {
           setError(
             "The microphone could not be accessed."
@@ -650,9 +777,10 @@ function InterviewRoom({ user, setActivePage }) {
       }
     };
 
-  /*
-    Internal recording stop function.
-  */
+  // ---------------------------
+  // STOP RECORDING
+  // ---------------------------
+
   const stopCurrentRecording = (
     discard = false
   ) => {
@@ -670,6 +798,32 @@ function InterviewRoom({ user, setActivePage }) {
     discardRecordingRef.current =
       discard;
 
+    if (!discard) {
+      setIsFinalizingAudio(true);
+
+      setMicrophoneStatus(
+        "processing"
+      );
+    }
+
+    try {
+      /*
+        Force recorder to send
+        remaining audio chunk.
+      */
+      if (
+        recorder.state ===
+        "recording"
+      ) {
+        recorder.requestData();
+      }
+    } catch (error) {
+      console.log(
+        "requestData skipped:",
+        error
+      );
+    }
+
     try {
       recorder.stop();
     } catch (error) {
@@ -678,23 +832,20 @@ function InterviewRoom({ user, setActivePage }) {
 
     setIsRecording(false);
 
-    setMicrophoneStatus(
-      discard
-        ? "idle"
-        : "ready"
-    );
+    if (discard) {
+      setIsFinalizingAudio(false);
+
+      setMicrophoneStatus(
+        "idle"
+      );
+    }
   };
 
-  /*
-    Stop button.
-  */
   const stopRecording = () => {
     stopCurrentRecording(false);
   };
 
-  /*
-    Delete current recording.
-  */
+  // Delete recording
   const deleteRecording = () => {
     if (isRecording) {
       stopCurrentRecording(true);
@@ -702,14 +853,16 @@ function InterviewRoom({ user, setActivePage }) {
 
     clearAudio();
 
+    setIsFinalizingAudio(false);
+
     setMicrophoneStatus(
       "idle"
     );
+
+    setError("");
   };
 
-  /*
-    Save interview progress.
-  */
+  // Save interview progress
   const saveInterviewProgress = (
     updatedAnswers,
     index
@@ -741,13 +894,13 @@ function InterviewRoom({ user, setActivePage }) {
     );
   };
 
-  /*
-    Go to next question.
-  */
+  // Go to next question
   const moveToNextQuestion = (
     updatedAnswers
   ) => {
     clearAudio();
+
+    setIsFinalizingAudio(false);
 
     setMicrophoneStatus(
       "idle"
@@ -774,9 +927,7 @@ function InterviewRoom({ user, setActivePage }) {
     );
   };
 
-  /*
-    Submit answer.
-  */
+  // Submit answer
   const submitAnswer = () => {
     setError("");
 
@@ -791,6 +942,14 @@ function InterviewRoom({ user, setActivePage }) {
     if (isRecording) {
       setError(
         "Please stop the recording before submitting your answer."
+      );
+
+      return;
+    }
+
+    if (isFinalizingAudio) {
+      setError(
+        "Your audio is still being prepared. Please wait a moment."
       );
 
       return;
@@ -854,23 +1013,19 @@ function InterviewRoom({ user, setActivePage }) {
     );
   };
 
-  /*
-    Skip current question.
-  */
+  // Skip question
   const skipQuestion = () => {
     if (!currentQuestion) {
       return;
     }
 
-    /*
-      Discard current recording
-      completely if active.
-    */
     if (isRecording) {
       stopCurrentRecording(true);
     }
 
     clearAudio();
+
+    setIsFinalizingAudio(false);
 
     const skippedAnswer = {
       questionId:
@@ -916,9 +1071,7 @@ function InterviewRoom({ user, setActivePage }) {
     );
   };
 
-  /*
-    Exit interview manually.
-  */
+  // Exit interview
   const handleExit = () => {
     const shouldExit =
       window.confirm(
@@ -941,17 +1094,20 @@ function InterviewRoom({ user, setActivePage }) {
       false
     );
 
+    setIsFinalizingAudio(
+      false
+    );
+
     setActivePage(
       "Overview"
     );
   };
 
-  /*
-    Setup unavailable.
-  */
+  // No setup
   if (!setup) {
     return (
       <div className="flex min-h-[500px] items-center justify-center">
+
         <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
 
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-red-50 font-bold text-red-500">
@@ -979,14 +1135,12 @@ function InterviewRoom({ user, setActivePage }) {
           </button>
 
         </div>
+
       </div>
     );
   }
 
-  /*
-    Prevent blank screen while
-    questions are being prepared.
-  */
+  // Loading questions
   if (
     !questions.length ||
     !currentQuestion
@@ -995,11 +1149,13 @@ function InterviewRoom({ user, setActivePage }) {
       <div className="flex min-h-[500px] items-center justify-center">
 
         <div className="text-center">
+
           <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-600"></div>
 
           <p className="mt-4 text-sm text-slate-500">
             Preparing interview...
           </p>
+
         </div>
 
       </div>
@@ -1014,8 +1170,8 @@ function InterviewRoom({ user, setActivePage }) {
 
         <div className="flex flex-col gap-5 p-5 sm:p-6 lg:flex-row lg:items-center lg:justify-between">
 
-          {/* LEFT */}
           <div>
+
             <div className="flex flex-wrap items-center gap-2">
 
               <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-bold text-red-500">
@@ -1039,11 +1195,12 @@ function InterviewRoom({ user, setActivePage }) {
             <p className="mt-1 text-xs text-slate-400">
               {setup.experienceLevel}
               {" • "}
-              {questions.length} questions
+              {questions.length}
+              {" "}questions
             </p>
+
           </div>
 
-          {/* RIGHT */}
           <div className="flex items-center gap-3">
 
             <div className="rounded-xl bg-slate-950 px-4 py-3 text-center">
@@ -1068,6 +1225,7 @@ function InterviewRoom({ user, setActivePage }) {
             </button>
 
           </div>
+
         </div>
 
         {/* PROGRESS */}
@@ -1098,6 +1256,7 @@ function InterviewRoom({ user, setActivePage }) {
             ></div>
 
           </div>
+
         </div>
 
       </section>
@@ -1109,13 +1268,12 @@ function InterviewRoom({ user, setActivePage }) {
         </div>
       )}
 
-      {/* MAIN INTERVIEW */}
+      {/* MAIN ROOM */}
       <section className="mt-6 grid gap-6 xl:grid-cols-[1.4fr_0.6fr]">
 
-        {/* LEFT CONTENT */}
         <div className="space-y-6">
 
-          {/* QUESTION CARD */}
+          {/* QUESTION */}
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
 
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1150,12 +1308,13 @@ function InterviewRoom({ user, setActivePage }) {
 
           </div>
 
-          {/* MICROPHONE CARD */}
+          {/* MICROPHONE */}
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
 
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 
               <div>
+
                 <h2 className="font-bold text-slate-900">
                   Voice Answer
                 </h2>
@@ -1163,6 +1322,7 @@ function InterviewRoom({ user, setActivePage }) {
                 <p className="mt-1 text-xs text-slate-400">
                   Record your answer using your microphone.
                 </p>
+
               </div>
 
               <MicrophoneBadge
@@ -1173,7 +1333,6 @@ function InterviewRoom({ user, setActivePage }) {
 
             </div>
 
-            {/* RECORDER */}
             <div
               className={`mt-6 rounded-2xl border p-5 transition sm:p-6 ${
                 isRecording
@@ -1186,18 +1345,25 @@ function InterviewRoom({ user, setActivePage }) {
 
                 <button
                   type="button"
+                  disabled={
+                    isFinalizingAudio
+                  }
                   onClick={
                     isRecording
                       ? stopRecording
                       : startRecording
                   }
                   className={`flex h-20 w-20 items-center justify-center rounded-full text-sm font-bold text-white shadow-lg transition ${
-                    isRecording
+                    isFinalizingAudio
+                      ? "cursor-not-allowed bg-slate-400"
+                      : isRecording
                       ? "animate-pulse bg-red-500 hover:bg-red-600"
                       : "bg-indigo-600 hover:bg-indigo-700"
                   }`}
                 >
-                  {isRecording
+                  {isFinalizingAudio
+                    ? "WAIT"
+                    : isRecording
                     ? "STOP"
                     : "MIC"}
                 </button>
@@ -1205,6 +1371,8 @@ function InterviewRoom({ user, setActivePage }) {
                 <h3 className="mt-4 font-bold text-slate-800">
                   {isRecording
                     ? "Recording..."
+                    : isFinalizingAudio
+                    ? "Preparing recording..."
                     : audioURL
                     ? "Recording complete"
                     : "Start recording"}
@@ -1221,18 +1389,20 @@ function InterviewRoom({ user, setActivePage }) {
                 )}
 
                 {!isRecording &&
-                  !audioURL && (
+                  !audioURL &&
+                  !isFinalizingAudio && (
                     <p className="mt-3 max-w-sm text-xs leading-5 text-slate-400">
-                      Click the microphone button and allow
-                      microphone permission in your browser.
+                      Click MIC and allow microphone permission.
+                      Speak clearly for at least 5 seconds.
                     </p>
                   )}
 
               </div>
 
-              {/* AUDIO PLAYBACK */}
+              {/* PLAYBACK */}
               {audioURL &&
-                !isRecording && (
+                !isRecording &&
+                !isFinalizingAudio && (
                   <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4">
 
                     <p className="mb-3 text-xs font-semibold text-slate-500">
@@ -1240,10 +1410,35 @@ function InterviewRoom({ user, setActivePage }) {
                     </p>
 
                     <audio
+                      key={audioURL}
                       controls
+                      preload="metadata"
+                      playsInline
                       src={audioURL}
                       className="w-full"
-                    ></audio>
+                      onLoadedMetadata={() => {
+                        console.log(
+                          "Audio loaded successfully"
+                        );
+                      }}
+                      onCanPlay={() => {
+                        console.log(
+                          "Audio is ready to play"
+                        );
+                      }}
+                      onError={(event) => {
+                        console.error(
+                          "Audio playback error:",
+                          event
+                        );
+
+                        setError(
+                          "The recording was created, but the browser could not play this audio."
+                        );
+                      }}
+                    >
+                      Your browser does not support audio playback.
+                    </audio>
 
                     <div className="mt-3 flex flex-wrap gap-2">
 
@@ -1282,6 +1477,7 @@ function InterviewRoom({ user, setActivePage }) {
             <div className="flex items-center justify-between gap-4">
 
               <div>
+
                 <h2 className="font-bold text-slate-900">
                   Answer Notes
                 </h2>
@@ -1289,6 +1485,7 @@ function InterviewRoom({ user, setActivePage }) {
                 <p className="mt-1 text-xs text-slate-400">
                   Optional during voice practice.
                 </p>
+
               </div>
 
               <span className="text-xs text-slate-400">
@@ -1312,18 +1509,30 @@ function InterviewRoom({ user, setActivePage }) {
             <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
 
               <button
-                onClick={skipQuestion}
-                className="rounded-xl border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+                onClick={
+                  skipQuestion
+                }
+                disabled={
+                  isFinalizingAudio
+                }
+                className="rounded-xl border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Skip Question
               </button>
 
               <button
-                onClick={submitAnswer}
-                className="rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700"
+                onClick={
+                  submitAnswer
+                }
+                disabled={
+                  isFinalizingAudio
+                }
+                className="rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-indigo-300"
               >
-                {currentQuestionIndex ===
-                questions.length - 1
+                {isFinalizingAudio
+                  ? "Preparing Audio..."
+                  : currentQuestionIndex ===
+                    questions.length - 1
                   ? "Submit & Finish"
                   : "Submit & Next →"}
               </button>
@@ -1334,10 +1543,9 @@ function InterviewRoom({ user, setActivePage }) {
 
         </div>
 
-        {/* RIGHT SIDEBAR */}
+        {/* RIGHT SIDE */}
         <aside className="space-y-6 xl:sticky xl:top-[95px] xl:self-start">
 
-          {/* SESSION DETAILS */}
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
 
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-indigo-600">
@@ -1396,7 +1604,6 @@ function InterviewRoom({ user, setActivePage }) {
 
           </div>
 
-          {/* PROJECT EVIDENCE */}
           {setup.useProjectEvidence &&
             setup.selectedProjectTitle && (
               <div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-5">
@@ -1420,7 +1627,6 @@ function InterviewRoom({ user, setActivePage }) {
               </div>
             )}
 
-          {/* ANSWER GUIDE */}
           <div className="rounded-2xl bg-slate-950 p-5">
 
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-indigo-400">
@@ -1453,7 +1659,6 @@ function InterviewRoom({ user, setActivePage }) {
 
           </div>
 
-          {/* RECORDING TIP */}
           <div className="rounded-2xl border border-amber-100 bg-amber-50 p-5">
 
             <p className="text-xs font-bold uppercase tracking-wider text-amber-600">
@@ -1461,9 +1666,10 @@ function InterviewRoom({ user, setActivePage }) {
             </p>
 
             <p className="mt-3 text-sm leading-6 text-amber-800">
-              Keep the microphone close enough for clear
-              audio, but avoid speaking directly into it.
-              Speak naturally and avoid answering too fast.
+              Speak for at least 5–10 seconds while testing.
+              If the recording plays but remains silent,
+              check the selected Windows and Chrome
+              microphone input.
             </p>
 
           </div>
@@ -1477,9 +1683,10 @@ function InterviewRoom({ user, setActivePage }) {
 }
 
 
-/*
-  Generate mock interview questions.
-*/
+// ------------------------------------------------
+// QUESTIONS
+// ------------------------------------------------
+
 function generateQuestions(setup) {
   const project =
     setup.selectedProjectTitle ||
@@ -1689,9 +1896,10 @@ function generateQuestions(setup) {
 }
 
 
-/*
-  Format timer.
-*/
+// ------------------------------------------------
+// TIMER
+// ------------------------------------------------
+
 function formatTime(seconds) {
   const safeSeconds =
     Math.max(
@@ -1721,36 +1929,49 @@ function formatTime(seconds) {
 }
 
 
-/*
-  Microphone status badge.
-*/
+// ------------------------------------------------
+// MICROPHONE BADGE
+// ------------------------------------------------
+
 function MicrophoneBadge({
   status,
 }) {
   const statusData = {
     idle: {
-      text: "Not Started",
+      text:
+        "Not Started",
 
       style:
         "bg-slate-100 text-slate-500",
     },
 
     requesting: {
-      text: "Requesting...",
+      text:
+        "Requesting...",
 
       style:
         "bg-amber-50 text-amber-600",
     },
 
     recording: {
-      text: "Recording",
+      text:
+        "Recording",
 
       style:
         "bg-red-50 text-red-500",
     },
 
+    processing: {
+      text:
+        "Preparing Audio...",
+
+      style:
+        "bg-amber-50 text-amber-600",
+    },
+
     ready: {
-      text: "Recorded",
+      text:
+        "Recorded",
 
       style:
         "bg-emerald-50 text-emerald-600",
@@ -1779,9 +2000,10 @@ function MicrophoneBadge({
 }
 
 
-/*
-  Fake recording waveform.
-*/
+// ------------------------------------------------
+// WAVEFORM
+// ------------------------------------------------
+
 function Waveform() {
   const heights = [
     25,
@@ -1828,9 +2050,10 @@ function Waveform() {
 }
 
 
-/*
-  Session info row.
-*/
+// ------------------------------------------------
+// INFO ROW
+// ------------------------------------------------
+
 function InfoRow({
   label,
   value,
@@ -1851,9 +2074,10 @@ function InfoRow({
 }
 
 
-/*
-  Answer guide item.
-*/
+// ------------------------------------------------
+// GUIDE ITEM
+// ------------------------------------------------
+
 function GuideItem({
   number,
   text,

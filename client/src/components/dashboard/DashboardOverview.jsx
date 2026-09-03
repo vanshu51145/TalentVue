@@ -2,6 +2,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import Chatbot from "./Chatbot";
 
 import {
   calculateInterviewScore,
@@ -137,6 +138,61 @@ function DashboardOverview({
 
         </div>
       </section>
+      {/* DEMO INTERVIEW VIDEO */}
+<section className="mt-8">
+  <div className="mb-4">
+    <p className="text-xs font-bold uppercase tracking-[0.18em] text-indigo-600">
+      Welcome to TalentVue AI
+    </p>
+
+    <h2 className="mt-2 text-2xl font-bold text-slate-900">
+      See How TalentVue AI Works
+    </h2>
+
+    <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
+      Watch this short demo to understand how an AI-powered interview
+      session works before starting your first interview.
+    </p>
+  </div>
+
+  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <div className="aspect-video w-full bg-slate-950">
+      <video
+        className="h-full w-full object-cover"
+        controls
+        playsInline
+        preload="metadata"
+        poster="/videos/interview-demo-poster.jpg"
+      >
+        <source
+          src="/videos/interview-demo-1.mp4"
+          type="video/mp4"
+        />
+
+        Your browser does not support the video tag.
+      </video>
+    </div>
+
+    <div className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+      <div>
+        <h3 className="font-bold text-slate-900">
+          Interview Demo
+        </h3>
+
+        <p className="mt-1 text-sm text-slate-500">
+          Learn how to answer questions and interact with the AI interviewer.
+        </p>
+      </div>
+
+      <button
+        onClick={() => setActivePage("Start Interview")}
+        className="rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700"
+      >
+        Start Interview →
+      </button>
+    </div>
+  </div>
+</section>
 
       {/* STATS */}
       <section className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">

@@ -9,7 +9,9 @@ import InterviewSetup from "./InterviewSetup";
 import InterviewRoom from "./InterviewRoom";
 import Report from "./Report";
 import DashboardOverview from "../components/dashboard/DashboardOverview";
+import PreInterviewCheck from "./PreInterviewCheck";
 import History from "./History";
+
 function Dashboard() {
   const navigate = useNavigate();
 
@@ -85,71 +87,97 @@ function Dashboard() {
           user={user}
         />
 
-        <main className="px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-          
-{activePage === "Overview" && (
-  <DashboardOverview
-    user={user}
-    setActivePage={setActivePage}
-  />
-)}
+<main className="px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
 
-{activePage === "Resume" && (
-  <ResumeUpload
-    user={user}
-    setActivePage={setActivePage}
-  />
-)}
-
-{activePage === "Projects" && (
-  <ProjectUpload
-    user={user}
-    setActivePage={setActivePage}
-  />
-)}
-
-{activePage === "Start Interview" && (
-  <InterviewSetup
-    user={user}
-    setActivePage={setActivePage}
-  />
-)}
-
-{activePage === "Interview Room" && (
-  <InterviewRoom
-    user={user}
-    setActivePage={setActivePage}
-  />
-)}
-
-{activePage === "Interview Result" && (
-  <Report
-    user={user}
-    setActivePage={setActivePage}
-  />
-)}
-
-{activePage === "Reports" && (
-  <Report
-    user={user}
-    setActivePage={setActivePage}
-  />
-)}
-
-{activePage !== "Overview" &&
-  activePage !== "Resume" &&
-  activePage !== "Projects" &&
-  activePage !== "Start Interview" &&
-  activePage !== "Interview Room" &&
-  activePage !== "Interview Result" &&
-  activePage !== "Reports" && (
-    <ComingSoon
-      page={activePage}
+  {/* OVERVIEW */}
+  {activePage === "Overview" && (
+    <DashboardOverview
+      user={user}
       setActivePage={setActivePage}
     />
   )}
 
-        </main>
+  {/* RESUME */}
+  {activePage === "Resume" && (
+    <ResumeUpload
+      user={user}
+      setActivePage={setActivePage}
+    />
+  )}
+
+  {/* PROJECTS */}
+  {activePage === "Projects" && (
+    <ProjectUpload
+      user={user}
+      setActivePage={setActivePage}
+    />
+  )}
+
+  {/* INTERVIEW HISTORY */}
+  {activePage === "Interviews" && (
+    <History
+      user={user}
+      setActivePage={setActivePage}
+    />
+  )}
+
+  {/* INTERVIEW SETUP */}
+  {activePage === "Start Interview" && (
+    <InterviewSetup
+      user={user}
+      setActivePage={setActivePage}
+    />
+  )}
+
+  {/* DEVICE CHECK */}
+  {activePage === "Device Check" && (
+    <PreInterviewCheck
+      user={user}
+      setActivePage={setActivePage}
+    />
+  )}
+
+  {/* INTERVIEW ROOM */}
+  {activePage === "Interview Room" && (
+    <InterviewRoom
+      user={user}
+      setActivePage={setActivePage}
+    />
+  )}
+
+  {/* LATEST INTERVIEW REPORT */}
+  {activePage === "Interview Result" && (
+    <Report
+      user={user}
+      setActivePage={setActivePage}
+    />
+  )}
+
+  {/* REPORTS */}
+  {activePage === "Reports" && (
+    <Report
+      user={user}
+      setActivePage={setActivePage}
+    />
+  )}
+
+  {/* COMING SOON */}
+  {activePage !== "Overview" &&
+    activePage !== "Resume" &&
+    activePage !== "Projects" &&
+    activePage !== "Interviews" &&
+    activePage !== "Start Interview" &&
+    activePage !== "Device Check" &&
+    activePage !== "Interview Room" &&
+    activePage !== "Interview Result" &&
+    activePage !== "Reports" && (
+      <ComingSoon
+        page={activePage}
+        setActivePage={setActivePage}
+      />
+    )}
+
+</main>
       </div>
     </div>
   );

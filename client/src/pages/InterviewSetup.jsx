@@ -202,7 +202,7 @@ function InterviewSetup({ user, setActivePage }) {
       })
     );
 
-    setActivePage("Interview Room");
+setActivePage("Device Check");
   };
 
   return (
