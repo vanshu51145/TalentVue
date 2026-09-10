@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import Chatbot from "../components/dashboard/Chatbot";
 
 import Sidebar from "../components/dashboard/Sidebar";
 import Topbar from "../components/dashboard/Topbar";
@@ -179,6 +180,7 @@ function Dashboard() {
 
 </main>
       </div>
+      <Chatbot />
     </div>
   );
 }
