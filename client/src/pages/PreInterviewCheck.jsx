@@ -656,6 +656,9 @@ function PreInterviewCheck({
       await stopMicrophone(true);
 
       const deviceCheck = {
+        // Bind this check to the interview session it validated
+        sessionId: setup?.sessionId,
+
         microphone: "ready",
 
         microphoneName,

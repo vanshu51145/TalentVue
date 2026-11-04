@@ -17,6 +17,7 @@ export function getStorageKeys(userId) {
     setup: `talentVueInterviewSetup_${userId}`,
     pendingInterview: `talentVuePendingInterview_${userId}`,
     activeInterview: `talentVueActiveInterview_${userId}`,
+    deviceCheck: `talentVueDeviceCheck_${userId}`,
     completedInterview: `talentVueCompletedInterview_${userId}`,
     history: `talentVueInterviewHistory_${userId}`,
   };

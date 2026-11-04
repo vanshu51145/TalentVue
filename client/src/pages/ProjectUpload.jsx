@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { apiFetch } from "../utils/api";
+
 function ProjectUpload({ user, setActivePage }) {
   const [projects, setProjects] = useState([]);
 
@@ -26,23 +28,124 @@ function ProjectUpload({ user, setActivePage }) {
 
   const storageKey = `talentVueProjects_${user?.id}`;
 
-  // Load saved projects
+  // Load saved projects (backend first, localStorage fallback + safe migration)
   useEffect(() => {
     if (!user?.id) return;
 
-    const savedProjects = localStorage.getItem(storageKey);
+    let localProjects = [];
 
-    if (savedProjects) {
-      try {
+    try {
+      const savedProjects = localStorage.getItem(storageKey);
+
+      if (savedProjects) {
         const parsedProjects = JSON.parse(savedProjects);
 
         if (Array.isArray(parsedProjects)) {
-          setProjects(parsedProjects);
+          localProjects = parsedProjects;
         }
-      } catch (error) {
-        console.log("Unable to load saved projects.");
       }
+    } catch {
+      localProjects = [];
     }
+
+    let cancelled = false;
+
+    const loadProjects = async () => {
+      let response;
+
+      // Offline / backend down -> local cache only, nothing rewritten
+      try {
+        response = await apiFetch("/api/projects");
+      } catch {
+        if (!cancelled) setProjects(localProjects);
+        return;
+      }
+
+      if (cancelled) return;
+
+      if (!response.ok || !Array.isArray(response.data.projects)) {
+        setProjects(localProjects);
+        return;
+      }
+
+      let serverProjects = response.data.projects.map((project) => ({
+        ...project,
+        id: project._id,
+      }));
+
+      // Migration: local-only projects get pushed to the server once.
+      // Match by title (duplicate-safe); failed ones stay local, nothing is deleted.
+      const migrateTargets = localProjects.filter(
+        (localProject) =>
+          !serverProjects.some(
+            (serverProject) =>
+              String(serverProject.title) === String(localProject.title)
+          )
+      );
+
+      const failedMigrations = [];
+
+      for (const localProject of migrateTargets) {
+        const payload = {
+          title: localProject.title,
+          description: localProject.description,
+          projectType: localProject.projectType || "Personal",
+          role: localProject.role,
+          technologies: Array.isArray(localProject.technologies)
+            ? localProject.technologies
+            : [],
+          githubUrl: localProject.githubUrl || "",
+          liveUrl: localProject.liveUrl || "",
+          contribution: localProject.contribution,
+          challenges: localProject.challenges || "",
+          outcome: localProject.outcome || "",
+          evidenceFiles: Array.isArray(localProject.evidenceFiles)
+            ? localProject.evidenceFiles
+            : [],
+        };
+
+        const hasRequired =
+          payload.title &&
+          payload.description &&
+          payload.role &&
+          payload.contribution &&
+          payload.technologies.length > 0;
+
+        try {
+          const result = hasRequired
+            ? await apiFetch("/api/projects", {
+                method: "POST",
+                body: payload,
+              })
+            : { ok: false };
+
+          if (!result.ok || !result.data.project) {
+            failedMigrations.push(localProject);
+            continue;
+          }
+
+          serverProjects = [
+            { ...result.data.project, id: result.data.project._id },
+            ...serverProjects,
+          ];
+        } catch {
+          failedMigrations.push(localProject);
+        }
+      }
+
+      if (cancelled) return;
+
+      const merged = [...serverProjects, ...failedMigrations];
+
+      saveProjects(merged);
+    };
+
+    loadProjects();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey, user?.id]);
 
   // Clean screenshot preview URLs
@@ -227,7 +330,7 @@ function ProjectUpload({ user, setActivePage }) {
     removeScreenshots();
   };
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
 
     setError("");
@@ -240,9 +343,7 @@ function ProjectUpload({ user, setActivePage }) {
       .map((technology) => technology.trim())
       .filter(Boolean);
 
-    const projectData = {
-      id: editingId || Date.now(),
-
+    const payload = {
       title: formData.title.trim(),
 
       description: formData.description.trim(),
@@ -266,46 +367,82 @@ function ProjectUpload({ user, setActivePage }) {
       evidenceFiles: screenshots.map(
         (file) => file.name
       ),
-
-      createdAt:
-        editingId
-          ? projects.find(
-              (project) => project.id === editingId
-            )?.createdAt
-          : new Date().toISOString(),
-
-      updatedAt: new Date().toISOString(),
     };
 
-    let updatedProjects;
+    try {
+      if (editingId) {
+        const { ok, data } = await apiFetch(
+          `/api/projects/${editingId}`,
+          {
+            method: "PUT",
+            body: payload,
+          }
+        );
 
-    if (editingId) {
-      updatedProjects = projects.map((project) =>
-        project.id === editingId
-          ? projectData
-          : project
-      );
+        if (!ok) {
+          setError(
+            data.message ||
+              "Failed to update project. Please try again."
+          );
+          return;
+        }
 
-      setSuccess("Project updated successfully.");
-    } else {
-      updatedProjects = [
-        projectData,
-        ...projects,
-      ];
+        const updatedProjects = projects.map(
+          (project) =>
+            project.id === editingId
+              ? {
+                  ...data.project,
+                  id: data.project._id,
+                }
+              : project
+        );
 
-      setSuccess(
-        "Project evidence added successfully."
+        saveProjects(updatedProjects);
+
+        setSuccess("Project updated successfully.");
+      } else {
+        const { ok, data } = await apiFetch(
+          "/api/projects",
+          {
+            method: "POST",
+            body: payload,
+          }
+        );
+
+        if (!ok) {
+          setError(
+            data.message ||
+              "Failed to save project. Please try again."
+          );
+          return;
+        }
+
+        const updatedProjects = [
+          {
+            ...data.project,
+            id: data.project._id,
+          },
+          ...projects,
+        ];
+
+        saveProjects(updatedProjects);
+
+        setSuccess(
+          "Project evidence added successfully."
+        );
+      }
+
+      resetForm();
+
+      window.scrollTo({
+        top: 0,
+        behavior: "smooth",
+      });
+    } catch {
+      setError(
+        "Unable to connect to server. Please make sure the backend is running."
       );
     }
-
-    saveProjects(updatedProjects);
-
-    resetForm();
-
-    window.scrollTo({
-      top: 0,
-      behavior: "smooth",
-    });
   };
 
   const handleEdit = (project) => {
@@ -339,24 +476,45 @@ function ProjectUpload({ user, setActivePage }) {
     });
   };
 
-  const handleDelete = (projectId) => {
+  const handleDelete = async (projectId) => {
     const confirmDelete = window.confirm(
       "Are you sure you want to delete this project?"
     );
 
     if (!confirmDelete) return;
 
-    const updatedProjects = projects.filter(
-      (project) => project.id !== projectId
-    );
+    try {
+      const { ok, data } = await apiFetch(
+        `/api/projects/${projectId}`,
+        {
+          method: "DELETE",
+        }
+      );
 
-    saveProjects(updatedProjects);
+      if (!ok) {
+        setError(
+          data.message ||
+            "Failed to delete project. Please try again."
+        );
+        return;
+      }
 
-    if (editingId === projectId) {
-      resetForm();
+      const updatedProjects = projects.filter(
+        (project) => project.id !== projectId
+      );
+
+      saveProjects(updatedProjects);
+
+      if (editingId === projectId) {
+        resetForm();
+      }
+
+      setSuccess("Project removed successfully.");
+    } catch {
+      setError(
+        "Unable to connect to server. Please make sure the backend is running."
+      );
     }
-
-    setSuccess("Project removed successfully.");
   };
 
   const projectReadiness = useMemo(() => {

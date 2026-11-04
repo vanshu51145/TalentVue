@@ -1,7 +1,10 @@
 import {
+  useEffect,
   useMemo,
   useState,
 } from "react";
+
+import { apiFetch } from "../utils/api";
 
 import {
   calculateInterviewScore,
@@ -9,6 +12,7 @@ import {
   deleteInterviewFromHistory,
   formatInterviewDate,
   getInterviewHistory,
+  saveInterviewHistory,
   setLatestCompletedInterview,
 } from "../utils/storage";
 
@@ -31,6 +35,161 @@ function History({
 
   const [message, setMessage] =
     useState("");
+
+  // Backend sync: server first, localStorage fallback + one-time migration
+  useEffect(() => {
+    if (!user?.id) return;
+
+    let cancelled = false;
+
+    const localHistory =
+      getInterviewHistory(user.id);
+
+    const loadHistory = async () => {
+      let response;
+
+      try {
+        response = await apiFetch(
+          "/api/interviews"
+        );
+      } catch {
+        if (!cancelled) {
+          setHistory(localHistory);
+        }
+        return;
+      }
+
+      if (cancelled) return;
+
+      if (
+        !response.ok ||
+        !Array.isArray(
+          response.data.interviews
+        )
+      ) {
+        setHistory(localHistory);
+        return;
+      }
+
+      const serverHistory = [
+        ...response.data.interviews,
+      ];
+
+      // Migration: local-only sessions pushed once; sessionId = dedupe key.
+      // Failed ones stay local; nothing is silently discarded.
+      const missing = localHistory.filter(
+        (localInterview) =>
+          !serverHistory.some(
+            (serverInterview) =>
+              String(
+                serverInterview.sessionId
+              ) ===
+              String(
+                localInterview.sessionId
+              )
+          )
+      );
+
+      const failedMigration = [];
+
+      for (const localInterview of missing) {
+        const hasData =
+          localInterview.setup &&
+          Array.isArray(
+            localInterview.answers
+          );
+
+        try {
+          const result = hasData
+            ? await apiFetch(
+                "/api/interviews",
+                {
+                  method: "POST",
+                  body: {
+                    sessionId:
+                      localInterview.sessionId,
+                    setup:
+                      localInterview.setup,
+                    answers:
+                      localInterview.answers,
+                    totalQuestions:
+                      localInterview.totalQuestions,
+                    answeredQuestions:
+                      localInterview.answeredQuestions,
+                    skippedQuestions:
+                      localInterview.skippedQuestions,
+                    completedAt:
+                      localInterview.completedAt,
+                    status:
+                      localInterview.status ||
+                      "completed",
+                  },
+                }
+              )
+            : { ok: false };
+
+          if (
+            result.ok &&
+            result.data.interview
+          ) {
+            serverHistory.push(
+              result.data.interview
+            );
+          } else {
+            failedMigration.push(
+              localInterview
+            );
+          }
+        } catch {
+          failedMigration.push(
+            localInterview
+          );
+        }
+      }
+
+      if (cancelled) return;
+
+      const seen = new Set();
+
+      const merged = [
+        ...serverHistory,
+        ...failedMigration,
+      ]
+        .filter((item) => {
+          const key = String(
+            item.sessionId
+          );
+
+          if (seen.has(key)) {
+            return false;
+          }
+
+          seen.add(key);
+          return true;
+        })
+        .sort(
+          (a, b) =>
+            new Date(
+              a.completedAt
+            ) -
+            new Date(b.completedAt)
+        );
+
+      setHistory(merged);
+
+      saveInterviewHistory(
+        user.id,
+        merged
+      );
+    };
+
+    loadHistory();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   const filteredHistory =
     useMemo(() => {
@@ -84,7 +243,7 @@ function History({
     );
   };
 
-  const handleDelete = (
+  const handleDelete = async (
     sessionId
   ) => {
     const confirmed =
@@ -96,21 +255,51 @@ function History({
       return;
     }
 
-    const updated =
-      deleteInterviewFromHistory(
-        user.id,
-        sessionId
-      );
-
-    setHistory(updated);
-
-    setMessage(
-      "Interview deleted successfully."
+    const interview = history.find(
+      (item) =>
+        String(item.sessionId) ===
+        String(sessionId)
     );
+
+    try {
+      if (interview?._id) {
+        const { ok, data } =
+          await apiFetch(
+            `/api/interviews/${interview._id}`,
+            {
+              method: "DELETE",
+            }
+          );
+
+        if (!ok) {
+          setMessage(
+            data.message ||
+              "Failed to delete interview. Please try again."
+          );
+          return;
+        }
+      }
+
+      const updated =
+        deleteInterviewFromHistory(
+          user.id,
+          sessionId
+        );
+
+      setHistory(updated);
+
+      setMessage(
+        "Interview deleted successfully."
+      );
+    } catch {
+      setMessage(
+        "Unable to connect to server. Please make sure the backend is running."
+      );
+    }
   };
 
   const handleClearHistory =
-    () => {
+    async () => {
       if (!history.length) {
         return;
       }
@@ -124,15 +313,37 @@ function History({
         return;
       }
 
-      clearInterviewHistory(
-        user.id
-      );
+      try {
+        const { ok, data } =
+          await apiFetch(
+            "/api/interviews",
+            {
+              method: "DELETE",
+            }
+          );
 
-      setHistory([]);
+        if (!ok) {
+          setMessage(
+            data.message ||
+              "Failed to clear history. Please try again."
+          );
+          return;
+        }
 
-      setMessage(
-        "Interview history cleared."
-      );
+        clearInterviewHistory(
+          user.id
+        );
+
+        setHistory([]);
+
+        setMessage(
+          "Interview history cleared."
+        );
+      } catch {
+        setMessage(
+          "Unable to connect to server. Please make sure the backend is running."
+        );
+      }
     };
 
   return (

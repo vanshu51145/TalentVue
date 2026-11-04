@@ -1,5 +1,8 @@
+
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+
+import { apiFetch } from "../utils/api";
 
 function Register() {
   const navigate = useNavigate();
@@ -12,8 +15,8 @@ function Register() {
   });
 
   const [showPassword, setShowPassword] = useState(false);
-
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -26,12 +29,13 @@ function Register() {
     setError("");
   };
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
 
     const name = formData.name.trim();
     const email = formData.email.trim().toLowerCase();
 
+    // Frontend validation
     if (!name || !email || !formData.password || !formData.confirmPassword) {
       setError("Please fill in all fields.");
       return;
@@ -57,37 +61,43 @@ function Register() {
       return;
     }
 
-    const savedUsers =
-      JSON.parse(localStorage.getItem("talentVueUsers")) || [];
+    try {
+      setLoading(true);
+      setError("");
 
-    const userExists = savedUsers.some(
-      (user) => user.email === email
-    );
+      const { ok, data } = await apiFetch(
+        "/api/auth/register",
+        {
+          method: "POST",
+          auth: false,
+          body: {
+            name,
+            email,
+            password: formData.password,
+          },
+        }
+      );
 
-    if (userExists) {
-      setError("An account with this email already exists.");
-      return;
+      if (!ok) {
+        setError(data.message || "Registration failed.");
+        return;
+      }
+
+      // Account created successfully
+      navigate("/login", {
+        state: {
+          message: "Account created successfully. Please login.",
+        },
+      });
+    } catch (error) {
+      console.error("Register error:", error);
+
+      setError(
+        "Unable to connect to server. Please make sure the backend is running."
+      );
+    } finally {
+      setLoading(false);
     }
-
-    const newUser = {
-      id: Date.now(),
-      name,
-      email,
-      password: formData.password,
-    };
-
-    const updatedUsers = [...savedUsers, newUser];
-
-    localStorage.setItem(
-      "talentVueUsers",
-      JSON.stringify(updatedUsers)
-    );
-
-    navigate("/login", {
-      state: {
-        message: "Account created successfully. Please login.",
-      },
-    });
   };
 
   return (
@@ -316,9 +326,10 @@ function Register() {
             {/* Submit */}
             <button
               type="submit"
-              className="w-full rounded-xl bg-indigo-600 px-5 py-3.5 font-semibold text-white transition hover:bg-indigo-700"
+              disabled={loading}
+              className="w-full rounded-xl bg-indigo-600 px-5 py-3.5 font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Create Account
+              {loading ? "Creating Account..." : "Create Account"}
             </button>
           </form>
 
@@ -348,3 +359,4 @@ function Register() {
 }
 
 export default Register;
+

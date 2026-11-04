@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { apiFetch } from "../utils/api";
+
 import {
   BarChart,
   Bar,
@@ -31,9 +33,88 @@ function Report({ user, setActivePage }) {
       localStorage.getItem(completedKey);
 
     if (!savedInterview) {
-      setError(
-        "No completed interview was found. Complete an interview to generate your report."
-      );
+      // Fallback: no local latest -> load latest session from backend
+      const loadFromServer = async () => {
+        let response;
+
+        try {
+          response = await apiFetch(
+            "/api/interviews"
+          );
+        } catch (error) {
+          console.error(
+            "REPORT FALLBACK ERROR:",
+            error
+          );
+
+          setError(
+            "No completed interview was found. Complete an interview to generate your report."
+          );
+
+          return;
+        }
+
+        const interviews =
+          response.ok &&
+          Array.isArray(
+            response.data.interviews
+          )
+            ? response.data.interviews
+            : [];
+
+        if (!interviews.length) {
+          setError(
+            "No completed interview was found. Complete an interview to generate your report."
+          );
+
+          return;
+        }
+
+        const latest =
+          interviews[0];
+
+        setInterview(latest);
+
+        const oldHistory =
+          JSON.parse(
+            localStorage.getItem(
+              historyKey
+            )
+          ) || [];
+
+        const exists =
+          oldHistory.some(
+            (item) =>
+              String(
+                item.sessionId
+              ) ===
+              String(
+                latest.sessionId
+              )
+          );
+
+        let updatedHistory =
+          oldHistory;
+
+        if (!exists) {
+          updatedHistory = [
+            ...oldHistory,
+            latest,
+          ];
+
+          localStorage.setItem(
+            historyKey,
+            JSON.stringify(
+              updatedHistory
+            )
+          );
+        }
+
+        setHistory(updatedHistory);
+      };
+
+      loadFromServer();
+
       return;
     }
 

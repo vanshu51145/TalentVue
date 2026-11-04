@@ -5,6 +5,8 @@ import {
   useNavigate,
 } from "react-router-dom";
 
+import { apiFetch } from "../utils/api";
+
 function Login() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -17,6 +19,8 @@ function Login() {
   const [showPassword, setShowPassword] = useState(false);
 
   const [error, setError] = useState("");
+
+  const [loading, setLoading] = useState(false);
 
   const successMessage = location.state?.message;
 
@@ -31,7 +35,7 @@ function Login() {
     setError("");
   };
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
 
     const email = formData.email.trim().toLowerCase();
@@ -41,32 +45,48 @@ function Login() {
       return;
     }
 
-    const savedUsers =
-      JSON.parse(localStorage.getItem("talentVueUsers")) || [];
+    try {
+      setLoading(true);
+      setError("");
 
-    const matchedUser = savedUsers.find(
-      (user) =>
-        user.email === email &&
-        user.password === formData.password
-    );
+      const { ok, data } = await apiFetch(
+        "/api/auth/login",
+        {
+          method: "POST",
+          auth: false,
+          body: {
+            email,
+            password: formData.password,
+          },
+        }
+      );
 
-    if (!matchedUser) {
-      setError("Invalid email or password.");
-      return;
+      if (!ok) {
+        setError(data.message || "Invalid email or password.");
+        return;
+      }
+
+      // Save JWT token
+      localStorage.setItem(
+        "talentVueToken",
+        data.token
+      );
+
+      // Save logged-in user
+      localStorage.setItem(
+        "talentVueCurrentUser",
+        JSON.stringify(data.user)
+      );
+
+      // Redirect to Dashboard
+      navigate("/dashboard");
+    } catch (error) {
+      setError(
+        "Unable to connect to server. Please make sure the backend is running."
+      );
+    } finally {
+      setLoading(false);
     }
-
-    const loggedInUser = {
-      id: matchedUser.id,
-      name: matchedUser.name,
-      email: matchedUser.email,
-    };
-
-    localStorage.setItem(
-      "talentVueCurrentUser",
-      JSON.stringify(loggedInUser)
-    );
-
-    navigate("/dashboard");
   };
 
   return (
@@ -254,9 +274,10 @@ function Login() {
             {/* Submit */}
             <button
               type="submit"
-              className="w-full rounded-xl bg-indigo-600 px-5 py-3.5 font-semibold text-white transition hover:bg-indigo-700"
+              disabled={loading}
+              className="w-full rounded-xl bg-indigo-600 px-5 py-3.5 font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-70"
             >
-              Login
+              {loading ? "Logging in..." : "Login"}
             </button>
           </form>
 

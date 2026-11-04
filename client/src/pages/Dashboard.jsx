@@ -1,51 +1,103 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+﻿import { useEffect, useState } from "react";
+import {
+  Outlet,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import Chatbot from "../components/dashboard/Chatbot";
-
 import Sidebar from "../components/dashboard/Sidebar";
 import Topbar from "../components/dashboard/Topbar";
-import ResumeUpload from "./ResumeUpload";
-import ProjectUpload from "./ProjectUpload";
-import InterviewSetup from "./InterviewSetup";
-import InterviewRoom from "./InterviewRoom";
-import Report from "./Report";
-import DashboardOverview from "../components/dashboard/DashboardOverview";
-import PreInterviewCheck from "./PreInterviewCheck";
-import History from "./History";
+import { getPageForPath, PAGE_SLUGS } from "../utils/dashboardPages";
+import { apiFetch } from "../utils/api";
 
 function Dashboard() {
   const navigate = useNavigate();
+
+  const location = useLocation();
 
   const [user, setUser] = useState(null);
 
   const [sidebarOpen, setSidebarOpen] =
     useState(false);
 
-  const [activePage, setActivePage] =
-    useState("Overview");
+  // URL is the source of truth; setActivePage keeps the same
+  // (name) interface all child components already use
+  const activePage = getPageForPath(
+    location.pathname
+  );
+
+  const setActivePage = (name) => {
+    const slug = PAGE_SLUGS[name];
+
+    navigate(
+      slug
+        ? `/dashboard/${slug}`
+        : "/dashboard"
+    );
+  };
 
   useEffect(() => {
-    const savedUser = localStorage.getItem(
-      "talentVueCurrentUser"
-    );
-
-    if (!savedUser) {
-      navigate("/login");
-      return;
-    }
-
-    try {
-      setUser(JSON.parse(savedUser));
-    } catch (error) {
-      localStorage.removeItem(
-        "talentVueCurrentUser"
+    const verifyToken = async () => {
+      const token = localStorage.getItem(
+        "talentVueToken"
       );
 
-      navigate("/login");
-    }
+      if (!token) {
+        navigate("/login");
+        return;
+      }
+
+      try {
+        const { ok, data } = await apiFetch(
+          "/api/user/profile"
+        );
+
+        if (!ok) {
+          localStorage.removeItem(
+            "talentVueToken"
+          );
+
+          localStorage.removeItem(
+            "talentVueCurrentUser"
+          );
+
+          navigate("/login");
+          return;
+        }
+
+        // Save verified user information
+        localStorage.setItem(
+          "talentVueCurrentUser",
+          JSON.stringify(data.user)
+        );
+
+        setUser(data.user);
+      } catch (error) {
+        console.log(
+          "Token verification error:",
+          error
+        );
+
+        localStorage.removeItem(
+          "talentVueToken"
+        );
+
+        localStorage.removeItem(
+          "talentVueCurrentUser"
+        );
+
+        navigate("/login");
+      }
+    };
+
+    verifyToken();
   }, [navigate]);
 
   const handleLogout = () => {
+    localStorage.removeItem(
+      "talentVueToken"
+    );
+
     localStorage.removeItem(
       "talentVueCurrentUser"
     );
@@ -88,98 +140,16 @@ function Dashboard() {
           user={user}
         />
 
-<main className="px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <main className="px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
 
-  {/* OVERVIEW */}
-  {activePage === "Overview" && (
-    <DashboardOverview
-      user={user}
-      setActivePage={setActivePage}
-    />
-  )}
+          {/* Active route page (App.jsx nested <Route> children) */}
+          <Outlet
+            context={{ user, setActivePage }}
+          />
 
-  {/* RESUME */}
-  {activePage === "Resume" && (
-    <ResumeUpload
-      user={user}
-      setActivePage={setActivePage}
-    />
-  )}
-
-  {/* PROJECTS */}
-  {activePage === "Projects" && (
-    <ProjectUpload
-      user={user}
-      setActivePage={setActivePage}
-    />
-  )}
-
-  {/* INTERVIEW HISTORY */}
-  {activePage === "Interviews" && (
-    <History
-      user={user}
-      setActivePage={setActivePage}
-    />
-  )}
-
-  {/* INTERVIEW SETUP */}
-  {activePage === "Start Interview" && (
-    <InterviewSetup
-      user={user}
-      setActivePage={setActivePage}
-    />
-  )}
-
-  {/* DEVICE CHECK */}
-  {activePage === "Device Check" && (
-    <PreInterviewCheck
-      user={user}
-      setActivePage={setActivePage}
-    />
-  )}
-
-  {/* INTERVIEW ROOM */}
-  {activePage === "Interview Room" && (
-    <InterviewRoom
-      user={user}
-      setActivePage={setActivePage}
-    />
-  )}
-
-  {/* LATEST INTERVIEW REPORT */}
-  {activePage === "Interview Result" && (
-    <Report
-      user={user}
-      setActivePage={setActivePage}
-    />
-  )}
-
-  {/* REPORTS */}
-  {activePage === "Reports" && (
-    <Report
-      user={user}
-      setActivePage={setActivePage}
-    />
-  )}
-
-  {/* COMING SOON */}
-  {activePage !== "Overview" &&
-    activePage !== "Resume" &&
-    activePage !== "Projects" &&
-    activePage !== "Interviews" &&
-    activePage !== "Start Interview" &&
-    activePage !== "Device Check" &&
-    activePage !== "Interview Room" &&
-    activePage !== "Interview Result" &&
-    activePage !== "Reports" && (
-      <ComingSoon
-        page={activePage}
-        setActivePage={setActivePage}
-      />
-    )}
-
-</main>
+        </main>
       </div>
+
       <Chatbot />
     </div>
   );
@@ -615,75 +585,4 @@ function FocusItem({
     </div>
   );
 }
-
-
-
-function ComingSoon({
-  page,
-  setActivePage,
-}) {
-  let title = page;
-  let description =
-    "This module will be connected in the next development part.";
-
-  if (page === "Resume") {
-    description =
-      "Upload and analyse your resume to generate personalised interview questions.";
-  }
-
-  if (page === "Projects") {
-    description =
-      "Add project details and evidence for project-defence interview preparation.";
-  }
-
-  if (page === "Interviews") {
-    description =
-      "Your interview history and attempts will appear here.";
-  }
-
-  if (page === "Reports") {
-    description =
-      "Detailed interview scores and improvement reports will appear here.";
-  }
-
-  if (page === "Start Interview") {
-    title = "Start Mock Interview";
-
-    description =
-      "Interview setup, role selection, difficulty and interview type will be built in the upcoming interview module.";
-  }
-
-  return (
-    <section className="flex min-h-[calc(100vh-130px)] items-center justify-center">
-      <div className="w-full max-w-xl rounded-3xl border border-slate-200 bg-white p-7 text-center shadow-sm sm:p-10">
-        
-        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-50 text-xl font-bold text-indigo-600">
-          T
-        </div>
-
-        <p className="mt-6 text-xs font-bold uppercase tracking-[0.18em] text-indigo-600">
-          TalentVue AI
-        </p>
-
-        <h1 className="mt-3 text-2xl font-bold text-slate-900 sm:text-3xl">
-          {title}
-        </h1>
-
-        <p className="mx-auto mt-4 max-w-md text-sm leading-6 text-slate-500">
-          {description}
-        </p>
-
-        <button
-          onClick={() =>
-            setActivePage("Overview")
-          }
-          className="mt-7 rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700"
-        >
-          ← Back to Dashboard
-        </button>
-      </div>
-    </section>
-  );
-}
-
 export default Dashboard;

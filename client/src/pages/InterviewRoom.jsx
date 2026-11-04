@@ -6,6 +6,13 @@ import {
   useState,
 } from "react";
 
+import { apiFetch } from "../utils/api";
+
+// A device check is trusted for half a day; after that the user
+// runs the check again before entering the interview room
+const DEVICE_CHECK_TTL_MS =
+  12 * 60 * 60 * 1000;
+
 function InterviewRoom({ user, setActivePage }) {
   const mediaRecorderRef = useRef(null);
   const streamRef = useRef(null);
@@ -52,10 +59,26 @@ function InterviewRoom({ user, setActivePage }) {
   const sessionKey =
     `talentVueActiveInterview_${user?.id}`;
 
+  const deviceCheckKey =
+    `talentVueDeviceCheck_${user?.id}`;
+
+  const [deviceCheckBlocked, setDeviceCheckBlocked] =
+    useState(false);
+
+  const [recoveryConflict, setRecoveryConflict] =
+    useState(false);
+
+  // Timer state mirror for snapshot writes (avoids stale closures)
+  const sessionSecondsRef = useRef(0);
+
   // Keep latest answers
   useEffect(() => {
     answersRef.current = answers;
   }, [answers]);
+
+  useEffect(() => {
+    sessionSecondsRef.current = sessionSeconds;
+  }, [sessionSeconds]);
 
   // Stop microphone stream
   const stopMediaStream = useCallback(() => {
@@ -85,7 +108,9 @@ function InterviewRoom({ user, setActivePage }) {
     setRecordingSeconds(0);
   }, []);
 
-  // Load interview setup
+  // Load interview setup, enforce the device-check gate and
+  // recover an in-progress snapshot (never auto-restores
+  // data that belongs to a different session)
   useEffect(() => {
     if (!user?.id) return;
 
@@ -102,11 +127,15 @@ function InterviewRoom({ user, setActivePage }) {
       return;
     }
 
+    let parsedSetup = null;
+
+    let generatedQuestions = [];
+
     try {
-      const parsedSetup =
+      parsedSetup =
         JSON.parse(savedSetup);
 
-      const generatedQuestions =
+      generatedQuestions =
         generateQuestions(parsedSetup);
 
       setSetup(parsedSetup);
@@ -131,24 +160,149 @@ function InterviewRoom({ user, setActivePage }) {
       setMicrophoneStatus("idle");
 
       setError("");
-
-      setSessionSeconds(
-        Number(
-          parsedSetup.duration || 20
-        ) * 60
-      );
-
-      setInterviewStarted(true);
     } catch (error) {
       console.error(error);
 
       setError(
         "Unable to load interview setup."
       );
+
+      return;
     }
+
+    const fullSessionSeconds =
+      Number(
+        parsedSetup?.duration || 20
+      ) * 60;
+
+    const pendingSessionId =
+      parsedSetup?.sessionId;
+
+    // ------------------------------------------------
+    // DEVICE CHECK GATE
+    // ------------------------------------------------
+    let deviceCheck = null;
+
+    try {
+      const rawDeviceCheck =
+        localStorage.getItem(deviceCheckKey);
+
+      if (rawDeviceCheck) {
+        deviceCheck =
+          JSON.parse(rawDeviceCheck);
+      }
+    } catch {
+      deviceCheck = null;
+    }
+
+    const checkedAtTime =
+      deviceCheck?.checkedAt
+        ? Date.parse(deviceCheck.checkedAt)
+        : NaN;
+
+    const deviceCheckValid =
+      Boolean(deviceCheck) &&
+      pendingSessionId !== undefined &&
+      String(deviceCheck.sessionId) ===
+        String(pendingSessionId) &&
+      deviceCheck.microphone === "ready" &&
+      !Number.isNaN(checkedAtTime) &&
+      Date.now() - checkedAtTime <
+        DEVICE_CHECK_TTL_MS;
+
+    if (!deviceCheckValid) {
+      setDeviceCheckBlocked(true);
+
+      return;
+    }
+
+    setDeviceCheckBlocked(false);
+
+    // ------------------------------------------------
+    // IN-PROGRESS SNAPSHOT RECOVERY
+    // ------------------------------------------------
+    let snapshot = null;
+
+    try {
+      const rawSnapshot =
+        localStorage.getItem(sessionKey);
+
+      if (rawSnapshot) {
+        snapshot =
+          JSON.parse(rawSnapshot);
+      }
+    } catch {
+      snapshot = null;
+    }
+
+    const hasSnapshot =
+      snapshot &&
+      snapshot.status === "in_progress" &&
+      snapshot.sessionId !== undefined &&
+      Array.isArray(snapshot.answers);
+
+    const snapshotMatches =
+      hasSnapshot &&
+      String(snapshot.sessionId) ===
+        String(pendingSessionId);
+
+    if (snapshotMatches) {
+      const restoredAnswers =
+        snapshot.answers;
+
+      const restoredIndex = Math.min(
+        Math.max(
+          Number.isInteger(
+            snapshot.currentQuestionIndex
+          )
+            ? snapshot.currentQuestionIndex
+            : 0,
+          0
+        ),
+        generatedQuestions.length - 1
+      );
+
+      const restoredSeconds = Number(
+        snapshot.sessionSecondsLeft
+      );
+
+      setAnswers(restoredAnswers);
+
+      answersRef.current = [
+        ...restoredAnswers,
+      ];
+
+      setCurrentQuestionIndex(restoredIndex);
+
+      setSessionSeconds(
+        Number.isFinite(restoredSeconds) &&
+          restoredSeconds > 0
+          ? restoredSeconds
+          : fullSessionSeconds
+      );
+
+      setInterviewStarted(true);
+
+      return;
+    }
+
+    if (hasSnapshot) {
+      // Snapshot belongs to a different session
+      // (stale data) — requires explicit restart
+      setRecoveryConflict(true);
+
+      return;
+    }
+
+    // Fresh start (existing auto-start behaviour)
+    setSessionSeconds(fullSessionSeconds);
+
+    setInterviewStarted(true);
   }, [
     user?.id,
     pendingKey,
+    sessionKey,
+    deviceCheckKey,
     clearAudio,
   ]);
 
@@ -275,6 +429,51 @@ function InterviewRoom({ user, setActivePage }) {
           )
         );
       }
+
+      // Persist to backend (honest logging, local data already saved first)
+      const persistInterview =
+        async () => {
+          try {
+            const { ok, data } =
+              await apiFetch(
+                "/api/interviews",
+                {
+                  method: "POST",
+                  body: {
+                    sessionId:
+                      completedInterview.sessionId,
+                    setup: completedInterview.setup,
+                    answers:
+                      completedInterview.answers,
+                    totalQuestions:
+                      completedInterview.totalQuestions,
+                    answeredQuestions:
+                      completedInterview.answeredQuestions,
+                    skippedQuestions:
+                      completedInterview.skippedQuestions,
+                    completedAt:
+                      completedInterview.completedAt,
+                    status:
+                      completedInterview.status,
+                  },
+                }
+              );
+
+            if (!ok) {
+              console.error(
+                "INTERVIEW SAVE REJECTED:",
+                data.message
+              );
+            }
+          } catch (error) {
+            console.error(
+              "INTERVIEW SAVE ERROR:",
+              error
+            );
+          }
+        };
+
+      persistInterview();
 
       localStorage.removeItem(
         sessionKey
@@ -869,8 +1068,7 @@ function InterviewRoom({ user, setActivePage }) {
   ) => {
     const sessionData = {
       sessionId:
-        setup?.sessionId ||
-        Date.now(),
+        setup?.sessionId,
 
       setup,
 
@@ -880,11 +1078,21 @@ function InterviewRoom({ user, setActivePage }) {
       answers:
         updatedAnswers,
 
+      sessionSecondsLeft:
+        sessionSecondsRef.current,
+
       status: "in_progress",
 
       updatedAt:
         new Date().toISOString(),
     };
+
+    if (
+      sessionData.sessionId ===
+      undefined
+    ) {
+      return;
+    }
 
     localStorage.setItem(
       sessionKey,
@@ -893,6 +1101,30 @@ function InterviewRoom({ user, setActivePage }) {
       )
     );
   };
+
+  // Latest progress mirror for the periodic snapshot interval
+  const saveProgressRef = useRef(() => {});
+
+  useEffect(() => {
+    saveProgressRef.current = () =>
+      saveInterviewProgress(
+        answersRef.current,
+        currentQuestionIndex
+      );
+  });
+
+  // Snapshot remaining time roughly every 30 seconds
+  useEffect(() => {
+    if (!interviewStarted) return;
+
+    const interval = setInterval(() => {
+      saveProgressRef.current();
+    }, 30000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [interviewStarted]);
 
   // Go to next question
   const moveToNextQuestion = (
@@ -1102,6 +1334,109 @@ function InterviewRoom({ user, setActivePage }) {
       "Overview"
     );
   };
+
+  // Device check gate failed (missing, stale,
+  // or for a different session)
+  if (deviceCheckBlocked) {
+    return (
+      <div className="flex min-h-[500px] items-center justify-center">
+
+        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50 font-bold text-amber-500">
+            !
+          </div>
+
+          <h2 className="mt-5 text-xl font-bold text-slate-900">
+            Device Check Required
+          </h2>
+
+          <p className="mt-3 text-sm leading-6 text-slate-500">
+            {error ||
+              "Complete the microphone, speaker and browser check for this interview before entering the room."}
+          </p>
+
+          <button
+            onClick={() =>
+              setActivePage(
+                "Device Check"
+              )
+            }
+            className="mt-6 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700"
+          >
+            Run Device Check
+          </button>
+
+        </div>
+
+      </div>
+    );
+  }
+
+  // A saved snapshot belongs to a different interview
+  // session — start fresh only on explicit confirmation
+  if (recoveryConflict) {
+    return (
+      <div className="flex min-h-[500px] items-center justify-center">
+
+        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-red-50 font-bold text-red-500">
+            !
+          </div>
+
+          <h2 className="mt-5 text-xl font-bold text-slate-900">
+            Session Data Mismatch
+          </h2>
+
+          <p className="mt-3 text-sm leading-6 text-slate-500">
+            {error ||
+              "A saved interview session on this device does not match your current interview setup. Nothing was restored. Restart the interview to begin a fresh session."}
+          </p>
+
+          <button
+            onClick={() => {
+              const confirmed =
+                window.confirm(
+                  "Discard the saved session and start a fresh interview?"
+                );
+
+              if (!confirmed) {
+                return;
+              }
+
+              localStorage.removeItem(
+                sessionKey
+              );
+
+              setRecoveryConflict(false);
+
+              setAnswers([]);
+
+              answersRef.current = [];
+
+              setCurrentQuestionIndex(0);
+
+              clearAudio();
+
+              setSessionSeconds(
+                Number(
+                  setup?.duration || 20
+                ) * 60
+              );
+
+              setInterviewStarted(true);
+            }}
+            className="mt-6 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700"
+          >
+            Restart Interview
+          </button>
+
+        </div>
+
+      </div>
+    );
+  }
 
   // No setup
   if (!setup) {

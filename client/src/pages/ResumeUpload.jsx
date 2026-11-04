@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import { apiFetch } from "../utils/api";
+
 function ResumeUpload({ user, setActivePage }) {
   const fileInputRef = useRef(null);
 
@@ -12,6 +14,8 @@ function ResumeUpload({ user, setActivePage }) {
 
   const [savedResume, setSavedResume] = useState(null);
 
+  const [uploading, setUploading] = useState(false);
+
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState(0);
 
@@ -19,7 +23,7 @@ function ResumeUpload({ user, setActivePage }) {
 
   const storageKey = `talentVueResume_${user?.id}`;
 
-  // Load saved metadata
+  // Load saved resume metadata
   useEffect(() => {
     if (!user?.id) return;
 
@@ -56,6 +60,7 @@ function ResumeUpload({ user, setActivePage }) {
     };
   }, [resumeFile]);
 
+  // Validate selected file
   const validateFile = (file) => {
     setError("");
 
@@ -82,29 +87,74 @@ function ResumeUpload({ user, setActivePage }) {
     return true;
   };
 
-  const selectFile = (file) => {
+  // Select and upload resume
+  const selectFile = async (file) => {
     if (!validateFile(file)) {
       return;
     }
 
-    setResumeFile(file);
-    setAnalysis(null);
-    setProgress(0);
+    const token = localStorage.getItem("talentVueToken");
 
-    const metadata = {
-      fileName: file.name,
-      fileSize: file.size,
-      uploadedAt: new Date().toISOString(),
-      status: "uploaded",
-      analysis: null,
-    };
+    if (!token) {
+      setError("Your session has expired. Please login again.");
+      return;
+    }
 
-    localStorage.setItem(
-      storageKey,
-      JSON.stringify(metadata)
-    );
+    try {
+      setUploading(true);
+      setError("");
+      setAnalysis(null);
+      setProgress(0);
 
-    setSavedResume(metadata);
+      const formData = new FormData();
+
+      formData.append("resume", file);
+
+      const { ok, data } = await apiFetch(
+        "/api/resume/upload",
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      if (!ok) {
+        setError(
+          data.message || "Resume upload failed."
+        );
+        return;
+      }
+
+      // Store selected file for preview
+      setResumeFile(file);
+
+      // Save backend response
+      const metadata = {
+        id: data.resume.id,
+        fileName: data.resume.fileName,
+        fileSize: data.resume.fileSize,
+        fileType: data.resume.fileType,
+        filePath: data.resume.filePath,
+        uploadedAt: data.resume.uploadedAt,
+        status: "uploaded",
+        analysis: null,
+      };
+
+      localStorage.setItem(
+        storageKey,
+        JSON.stringify(metadata)
+      );
+
+      setSavedResume(metadata);
+    } catch (error) {
+      console.log("Resume upload error:", error);
+
+      setError(
+        "Unable to upload resume. Please make sure the backend is running."
+      );
+    } finally {
+      setUploading(false);
+    }
   };
 
   const handleFileChange = (event) => {
@@ -227,6 +277,8 @@ function ResumeUpload({ user, setActivePage }) {
       };
 
       const metadata = {
+        id: savedResume?.id,
+
         fileName:
           resumeFile?.name ||
           savedResume?.fileName,
@@ -234,6 +286,12 @@ function ResumeUpload({ user, setActivePage }) {
         fileSize:
           resumeFile?.size ||
           savedResume?.fileSize,
+
+        fileType:
+          resumeFile?.type ||
+          savedResume?.fileType,
+
+        filePath: savedResume?.filePath,
 
         uploadedAt:
           savedResume?.uploadedAt ||
@@ -384,9 +442,12 @@ function ResumeUpload({ user, setActivePage }) {
 
                 <button
                   type="button"
-                  className="mt-5 rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700"
+                  disabled={uploading}
+                  className="mt-5 rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Browse Resume
+                  {uploading
+                    ? "Uploading..."
+                    : "Browse Resume"}
                 </button>
 
                 <p className="mt-4 text-xs text-slate-400">
@@ -438,20 +499,36 @@ function ResumeUpload({ user, setActivePage }) {
                     <div className="flex gap-2">
                       <button
                         onClick={handleBrowse}
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        disabled={uploading}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                       >
                         Change
                       </button>
 
                       <button
                         onClick={handleRemove}
-                        className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-500 hover:bg-red-50"
+                        disabled={uploading}
+                        className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-500 hover:bg-red-50 disabled:opacity-60"
                       >
                         Remove
                       </button>
                     </div>
                   </div>
                 </div>
+
+                {/* Upload Status */}
+                {uploading && (
+                  <div className="mt-4 rounded-xl bg-indigo-50 px-4 py-3">
+                    <p className="text-sm font-semibold text-indigo-700">
+                      Uploading resume...
+                    </p>
+
+                    <p className="mt-1 text-xs text-indigo-600/70">
+                      Please wait while your resume is being
+                      uploaded to TalentVue.
+                    </p>
+                  </div>
+                )}
 
                 {/* Analyze */}
                 <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -469,9 +546,9 @@ function ResumeUpload({ user, setActivePage }) {
 
                   <button
                     onClick={handleAnalyze}
-                    disabled={analyzing}
+                    disabled={analyzing || uploading}
                     className={`w-full rounded-xl px-5 py-3 text-sm font-semibold text-white transition sm:w-auto ${
-                      analyzing
+                      analyzing || uploading
                         ? "cursor-not-allowed bg-indigo-400"
                         : "bg-indigo-600 hover:bg-indigo-700"
                     }`}
@@ -607,6 +684,7 @@ function ResumeUpload({ user, setActivePage }) {
 }
 
 
+// STEP COMPONENT
 
 function Step({
   number,
@@ -648,6 +726,7 @@ function Step({
 }
 
 
+// CHECKLIST COMPONENT
 
 function ChecklistItem({ text }) {
   return (
@@ -664,6 +743,7 @@ function ChecklistItem({ text }) {
 }
 
 
+// ANALYSIS COMPONENT
 
 function ResumeAnalysis({
   analysis,
