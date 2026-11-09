@@ -23,9 +23,11 @@ function ResumeUpload({ user, setActivePage }) {
 
   const storageKey = `talentVueResume_${user?.id}`;
 
-  // Load saved resume metadata
+  // Load saved resume metadata, then refresh it from the backend
   useEffect(() => {
     if (!user?.id) return;
+
+    let cachedAnalysis = null;
 
     const savedData = localStorage.getItem(storageKey);
 
@@ -35,6 +37,8 @@ function ResumeUpload({ user, setActivePage }) {
 
         setSavedResume(parsedData);
 
+        cachedAnalysis = parsedData.analysis || null;
+
         if (parsedData.analysis) {
           setAnalysis(parsedData.analysis);
         }
@@ -42,6 +46,52 @@ function ResumeUpload({ user, setActivePage }) {
         console.log("Unable to load saved resume.");
       }
     }
+
+    // Backend-first refresh: localStorage is per-device, so a
+    // browser on another device must read the server copy instead
+    const loadResumeFromBackend = async () => {
+      try {
+        const { ok, data } = await apiFetch(
+          "/api/resume"
+        );
+
+        if (
+          !ok ||
+          !data ||
+          !data.resume
+        ) {
+          // 404 (no resume yet) and other non-OK
+          // responses keep the cached state
+          return;
+        }
+
+        const metadata = {
+          id: data.resume.id,
+          fileName: data.resume.fileName,
+          fileSize: data.resume.fileSize,
+          fileType: data.resume.fileType,
+          filePath: data.resume.filePath ?? "",
+          uploadedAt: data.resume.uploadedAt,
+          status: "uploaded",
+          analysis: cachedAnalysis,
+        };
+
+        setSavedResume(metadata);
+
+        localStorage.setItem(
+          storageKey,
+          JSON.stringify(metadata)
+        );
+      } catch {
+        // Network failure: keep the cached
+        // metadata and never erase it
+        console.log(
+          "Unable to fetch resume. Keeping locally cached resume metadata."
+        );
+      }
+    };
+
+    loadResumeFromBackend();
   }, [storageKey, user?.id]);
 
   // Create PDF preview URL
