@@ -150,16 +150,10 @@ const forgotPassword = async (req, res) => {
       email
     )}`;
 
-    try {
-      await sendResetPasswordEmail({ email, resetUrl });
-    } catch (emailError) {
-      // Clear the token so a later retry starts fresh. Log server-side only:
-      // never reveal to the caller whether the address exists or that
-      // delivery failed (prevents account enumeration).
-      user.passwordResetToken = undefined;
-      user.passwordResetExpires = undefined;
-      await user.save();
-
+    // Send the reset email without blocking the HTTP response. The reset
+    // token is already saved, so a slow SMTP delivery cannot cause a
+    // frontend timeout while the reset email still arrives.
+    sendResetPasswordEmail({ email, resetUrl }).catch((emailError) => {
       console.error(
         "EMAIL SEND ERROR:",
         {
@@ -169,7 +163,14 @@ const forgotPassword = async (req, res) => {
           message: emailError.message,
         }
       );
-    }
+
+      // Best-effort cleanup so a retry can start fresh.
+      user.passwordResetToken = undefined;
+      user.passwordResetExpires = undefined;
+      user.save().catch((saveError) => {
+        console.error("RESET TOKEN CLEAR ERROR:", saveError.message);
+      });
+    });
 
     res.status(200).json({
       message:
